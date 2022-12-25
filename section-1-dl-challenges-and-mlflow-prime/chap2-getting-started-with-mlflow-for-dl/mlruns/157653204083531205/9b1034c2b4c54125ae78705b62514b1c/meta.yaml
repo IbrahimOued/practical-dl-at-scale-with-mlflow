@@ -1,0 +1,15 @@
+artifact_uri: file:///home/ibrahim/documents/practical-dl-at-scale-with-mlflow/section-1-dl-challenges-and-mlflow-prime/chap2-getting-started-with-mlflow-for-dl/mlruns/157653204083531205/9b1034c2b4c54125ae78705b62514b1c/artifacts
+end_time: 1671992973457
+entry_point_name: ''
+experiment_id: '157653204083531205'
+lifecycle_stage: active
+run_id: 9b1034c2b4c54125ae78705b62514b1c
+run_name: chapter02
+run_uuid: 9b1034c2b4c54125ae78705b62514b1c
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1671992405002
+status: 3
+tags: []
+user_id: ibrahim

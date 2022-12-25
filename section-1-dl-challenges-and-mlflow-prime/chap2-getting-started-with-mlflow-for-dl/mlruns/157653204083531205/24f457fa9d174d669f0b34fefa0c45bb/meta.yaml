@@ -1,0 +1,15 @@
+artifact_uri: file:///home/ibrahim/documents/practical-dl-at-scale-with-mlflow/section-1-dl-challenges-and-mlflow-prime/chap2-getting-started-with-mlflow-for-dl/mlruns/157653204083531205/24f457fa9d174d669f0b34fefa0c45bb/artifacts
+end_time: 1671992403652
+entry_point_name: ''
+experiment_id: '157653204083531205'
+lifecycle_stage: active
+run_id: 24f457fa9d174d669f0b34fefa0c45bb
+run_name: upbeat-mare-916
+run_uuid: 24f457fa9d174d669f0b34fefa0c45bb
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1671990710308
+status: 3
+tags: []
+user_id: ibrahim
