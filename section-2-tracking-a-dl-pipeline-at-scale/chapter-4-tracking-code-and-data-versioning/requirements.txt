@@ -1,0 +1,11 @@
+mlflow
+boto3
+datasets
+ipython
+lightning-flash
+lightning-flash[text]
+torch
+ipykernel
+transformers
+pytorch-lightning
+click
