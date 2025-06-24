@@ -1,3 +1,3 @@
-FROM python:3.10-slim-buster
-# Install python packages
-RUN pip install mlflow boto3 pymysql
+FROM ghcr.io/mlflow/mlflow:v2.22.0
+
+RUN pip install boto3 psycopg2-binary

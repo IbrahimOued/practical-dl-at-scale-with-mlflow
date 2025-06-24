@@ -1,7 +1,0 @@
-ipykernel
-lightning-flash[all]
-mlflow
-transformers
-boto3
-pytorch-lightning
-datasets

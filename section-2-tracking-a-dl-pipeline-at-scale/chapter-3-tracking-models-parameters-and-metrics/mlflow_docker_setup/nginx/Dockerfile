@@ -1,4 +1,4 @@
-FROM nginx:1.23.3
+FROM nginx:stable-alpine3.21-slim
 # Remove default Nginx config
 RUN rm /etc/nginx/nginx.conf
 # Copy the modified Nginx conf

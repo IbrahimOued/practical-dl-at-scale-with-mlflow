@@ -3,6 +3,8 @@ import os
 
 import click
 import mlflow
+from dotenv import load_dotenv
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
 logger = logging.getLogger()
@@ -13,18 +15,23 @@ _steps = [
     "register_model"
 ]
 
+# Load environment variables
+load_dotenv()
+
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+os.environ['MLFLOW_S3_ENDPOINT_URL'] = "http://localhost:9000"
+os.environ['AWS_ACCESS_KEY_ID'] = AWS_ACCESS_KEY_ID
+os.environ['AWS_SECRET_ACCESS_KEY'] = AWS_SECRET_ACCESS_KEY
+
 
 @click.command()
 @click.option("--steps", default="all", type=str)
 def run_pipeline(steps):
 
-    # Setup the mlflow experiment and AWS access
-    os.environ["MLFLOW_TRACKING_URI"] = "http://localhost"
-    os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://localhost:9000"
-    os.environ["AWS_ACCESS_KEY_ID"] = "minio"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "minio123"
 
-    EXPERIMENT_NAME = "dl_model_chapter04"
+    EXPERIMENT_NAME = "dl_at_scale_model_chapter04"
+    mlflow.set_tracking_uri("http://localhost") # important to run the experiment inside the docker experimentation env
     mlflow.set_experiment(EXPERIMENT_NAME)
     experiment = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
     logger.info("pipeline experiment_id: %s", experiment.experiment_id)
@@ -40,6 +47,11 @@ def run_pipeline(steps):
             file_path_uri = download_run.data.params['local_folder']
             logger.info('downloaded data is located locally in folder: %s', file_path_uri)
             logger.info(download_run)
+
+        if "create_dataset" in active_steps:
+            create_dataset_run = mlflow.run(".", "create_dataset", parameters={"data_path": file_path_uri, "train_test_val_path": file_path_uri})
+            create_dataset_run = mlflow.tracking.MlflowClient().get_run(create_dataset_run.run_id)
+            logger.info(create_dataset_run)
 
         if "fine_tuning_model" in active_steps:
             fine_tuning_run = mlflow.run(".", "fine_tuning_model", parameters={"data_path": file_path_uri})

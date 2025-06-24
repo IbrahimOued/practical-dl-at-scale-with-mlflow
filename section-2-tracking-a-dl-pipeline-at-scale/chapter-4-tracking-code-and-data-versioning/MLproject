@@ -1,5 +1,6 @@
-name: dl_model_chapter04
+name: mlflow_dl_model_chapter_04
 conda_env: conda.yaml
+# docker_env: mlflow_dl_model_chapter_04
 
 entry_points:
   main:
@@ -28,23 +29,36 @@ entry_points:
       "python pipeline/download_dataset.py --download_url {download_url} --local_folder {local_folder} \
       --pipeline_run_name {pipeline_run_name}"
 
+  create_dataset:
+    parameters:
+      data_path:
+        description: the path to get the train/test/validation data
+        type: str
+        default: ./data
+      train_test_val_path:
+        description: the path to save the train/test/validation data
+        type: str
+        default: ./data/train_test_val
+      pipeline_run_name:
+        description: an mlflow run name
+        type: str
+        default: chapter04
+    command:
+      "python pipeline/create_dataset.py --data_path {data_path} --pipeline_run_name {pipeline_run_name}"
+
   fine_tuning_model:
     parameters:
       foundation_model:
         description: a foundation model name in huggingface model repo
         type: str
         default: prajjwal1/bert-tiny
-      fine_tuning_strategy:
-        description: a fine_tuning_strategy
-        type: str
-        default: freeze
       data_path:
         description: the path to get the train/test/validation data
         type: str
         default: data
     command:
       "python pipeline/fine_tuning_model.py --foundation_model {foundation_model} \
-      --fine_tuning_strategy {fine_tuning_strategy} --data_path {data_path}"
+      --data_path {data_path}"
 
   register_model:
     parameters:

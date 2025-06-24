@@ -1,0 +1,96 @@
+services:
+
+  minio:
+    image: minio/minio:latest
+    env_file:
+      - ./.env
+    container_name: mlflow_s3
+    command: server /data --console-address ":9001"
+    networks:
+      - storage
+    expose:   # I forgot to add this line
+      - 9000
+      - 9001
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - minio_data:/data
+    restart: always
+
+  create_mlflow_bucket:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z-cpuv1
+    depends_on:
+      - minio
+    container_name: create_mlflow_bucket
+    networks:
+      - storage
+    env_file:
+      - .env
+    entrypoint: >
+      /bin/sh -c " until (/usr/bin/mc config host add minio ${MLFLOW_S3_ENDPOINT_URL} ${AWS_ACCESS_KEY_ID} ${AWS_SECRET_ACCESS_KEY}) do echo '...waiting...' && sleep 1; done; /usr/bin/mc mb --ignore-existing minio/${MLFLOW_BUCKET_NAME} /usr/bin/mc policy set public minio/${MLFLOW_BUCKET_NAME}; /usr/bin/mc mb --ignore-existing minio/${DATA_REPO_BUCKET_NAME}; /usr/bin/mc policy download minio/${DATA_REPO_BUCKET_NAME}; exit 0; "
+
+
+  postgres:
+    image: postgres:latest
+    env_file:
+     - ./.env
+    container_name: mlflow_db
+    restart: always
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    expose:
+      - 5432
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  web:
+    restart: always
+    build: ./mlflow
+    image: mlflow_server
+    env_file:
+      - ./.env
+    container_name: mlflow_server
+    expose:
+      - 5000
+    networks:
+      - frontend
+      - backend
+      - storage
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    command: >
+      mlflow server --backend-store-uri ${MLFLOW_BACKEND_STORE_URI}
+        --default-artifact-root s3://mlflow/
+        --host 0.0.0.0
+
+  nginx:
+    restart: always
+    build: ./nginx
+    image: mlflow_nginx
+    container_name: mlflow_nginx
+    ports:
+      - "80:80"
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - frontend
+      - storage
+    depends_on:
+      - web
+      - minio
+
+networks:
+  frontend:
+  backend:
+  storage:
+
+volumes:
+  db_data:
+  minio_data:

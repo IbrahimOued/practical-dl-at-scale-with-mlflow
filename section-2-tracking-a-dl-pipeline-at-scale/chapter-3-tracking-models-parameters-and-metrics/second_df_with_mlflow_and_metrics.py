@@ -1,5 +1,3 @@
-import click
-import mlflow
 import torch
 from torchinfo import summary
 from torch.utils.data import Dataset, DataLoader
@@ -13,48 +11,65 @@ import os
 import zipfile
 import requests
 from tqdm.auto import tqdm
+import mlflow
 import torchmetrics
-import logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)-15s %(message)s")
-logger = logging.getLogger()
+from dotenv import load_dotenv
+# Load environment variables
+load_dotenv('./mlflow_docker_setup/.env')
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 
+os.environ['MLFLOW_S3_ENDPOINT_URL'] = "http://localhost:9000"
+os.environ['AWS_ACCESS_KEY_ID'] = AWS_ACCESS_KEY_ID
+os.environ['AWS_SECRET_ACCESS_KEY'] = AWS_SECRET_ACCESS_KEY
 
+# Set up MLflow experiment
+EXPERIMENT_NAME = "dl_model_chapter2"
+mlflow.set_experiment(EXPERIMENT_NAME)
+experiment = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
+print("experiment_id:", experiment.experiment_id)
+mlflow.pytorch.autolog()
 
+# Define metrics
+metrics_list = ['accuracy', 'precision', 'recall', 'f1']
 
-@click.command(help="This program finetunes a deep learning model for sentimental classification.")
-@click.option("--foundation_model", default="prajjwal1/bert-tiny", help="This is the pretrained backbone foundation model")
-@click.option("--data_path", default="data", help="This is the path to data.")
-def task(foundation_model, data_path):
+# Initialize torchmetrics
+metrics = {
+    'accuracy': torchmetrics.Accuracy(task='binary'),
+    'precision': torchmetrics.Precision(task='binary'),
+    'recall': torchmetrics.Recall(task='binary'),
+    'f1': torchmetrics.F1Score(task='binary')
+}
 
-    # datamodule = TextClassificationData.from_csv(
-    #     "review",
-    #     "sentiment",
-    #     train_file=f"{data_path}/imdb/train.csv",
-    #     val_file=f"{data_path}/imdb/valid.csv",
-    #     test_file=f"{data_path}/imdb/test.csv",
-    #     batch_size=64,
-    # )
+# --- 1. Data Download Utility (similar to Flash's download_data) ---
+def download_and_extract_zip(url, path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    zip_file_name = os.path.join(path, "downloaded_data.zip")
 
-    # classifier_model = TextClassifier(backbone=foundation_model, num_classes=datamodule.num_classes, metrics=torchmetrics.F1Score(datamodule.num_classes))
-    # trainer = flash.Trainer(max_epochs=20, gpus=torch.cuda.device_count())
+    print(f"Downloading data from {url}...")
+    response = requests.get(url, stream=True)
+    total_size_in_bytes = int(response.headers.get('content-length', 0))
+    block_size = 1024 # 1 Kibibyte
+    progress_bar = tqdm(total=total_size_in_bytes, unit='iB', unit_scale=True)
+    with open(zip_file_name, 'wb') as file:
+        for data in response.iter_content(block_size):
+            progress_bar.update(len(data))
+            file.write(data)
+    progress_bar.close()
 
-    # mlflow.pytorch.autolog()
-    # with mlflow.start_run(run_name="chapter04") as dl_model_tracking_run:
-    #     trainer.finetune(classifier_model, datamodule=datamodule, strategy=fine_tuning_strategy)
-    #     trainer.test(classifier_model, datamodule=datamodule)
+    if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
+        print("ERROR, something went wrong during download")
+        return
 
-    #     # mlflow log additional hyper-parameters used in this training
-    #     mlflow.log_params(classifier_model.hparams)
+    print(f"Extracting {zip_file_name} to {path}...")
+    with zipfile.ZipFile(zip_file_name, 'r') as zip_ref:
+        zip_ref.extractall(path)
+    os.remove(zip_file_name) # Clean up the zip file
+    print("Download and extraction complete.")
 
-    #     run_id = dl_model_tracking_run.info.run_id
-    #     logger.info("run_id: {}; lifecycle_stage: {}".format(run_id, mlflow.get_run(run_id).info.lifecycle_stage))
-    #     mlflow.log_param("fine_tuning_mlflow_run_id", run_id)
-    #     mlflow.set_tag('pipeline_step', __file__)
-    train(foundation_model, data_path)
-
-
-
+# --- 2. Custom Dataset for IMDB (replaces TextClassificationData) ---
 class IMDBDataset(Dataset):
     def __init__(self, dataframe, tokenizer, max_length):
         self.dataframe = dataframe
@@ -89,18 +104,83 @@ class IMDBDataset(Dataset):
             'attention_mask': encoding['attention_mask'].flatten(),
             'labels': torch.tensor(label, dtype=torch.long)
         }
-    
-def train(foundation_model, data_path): 
+
+# --- 3. Training Function ---
+def train_epoch(model, dataloader, optimizer, device):
+    model.train()
+    total_loss = 0
+    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training")):
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+
+        optimizer.zero_grad()
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        loss = outputs.loss
+        total_loss += loss.item()
+
+        loss.backward()
+        optimizer.step()
+
+    return total_loss / len(dataloader)
+
+# --- 4. Evaluation Function ---
+def evaluate_epoch(model, dataloader, device, metrics):
+    model.eval()
+    total_loss = 0
+    all_predictions = []
+    all_true_labels = []
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            loss = outputs.loss
+            total_loss += loss.item()
+
+            logits = outputs.logits
+            predictions = torch.argmax(logits, dim=-1).cpu().numpy()
+            all_predictions.extend(predictions)
+            all_true_labels.extend(labels.cpu().numpy())
+
+    avg_loss = total_loss / len(dataloader)
+
+    # Update metrics
+    for metric_name in metrics_list:
+        metrics[metric_name](torch.tensor(all_predictions), torch.tensor(all_true_labels))
+
+    # Compute metrics
+    accuracy = metrics['accuracy'].compute().item()
+    precision = metrics['precision'].compute().item()
+    recall = metrics['recall'].compute().item()
+    f1 = metrics['f1'].compute().item()
+
+    # Reset metrics
+    for metric_name in metrics_list:
+        metrics[metric_name].reset()
+
+    return avg_loss, accuracy, precision, recall, f1
+
+# --- Main Script ---
+if __name__ == "__main__":
+    # --- 1. & 2. Data Download and Preparation ---
+    data_url = "https://pl-flash-data.s3.amazonaws.com/imdb.zip"
+    data_path = "./data/"
+    download_and_extract_zip(data_url, data_path)
+
     train_df = pd.read_csv(os.path.join(data_path, "imdb/train.csv"))
     val_df = pd.read_csv(os.path.join(data_path, "imdb/valid.csv"))
     test_df = pd.read_csv(os.path.join(data_path, "imdb/test.csv"))
 
     # Determine number of classes from the sentiment column
     num_classes = train_df['sentiment'].nunique()
-    logger.info(f"Number of classes: {num_classes}")
+    print(f"Number of classes: {num_classes}")
 
     # Initialize Tokenizer
-    model_name = foundation_model # As used in Flash example
+    model_name = "prajjwal1/bert-tiny" # As used in Flash example
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     max_token_length = 128 # A common max length for BERT-tiny, adjust as needed
 
@@ -121,7 +201,7 @@ def train(foundation_model, data_path):
 
     # Determine device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+    print(f"Using device: {device}")
     model.to(device)
 
     # Optimizer and Learning Rate
@@ -144,29 +224,21 @@ def train(foundation_model, data_path):
             "learning_rate": 2e-5,
             "max_token_length": max_token_length
         }
-
-        metrics = {
-            'accuracy': torchmetrics.Accuracy(task='binary'),
-            'precision': torchmetrics.Precision(task='binary'),
-            'recall': torchmetrics.Recall(task='binary'),
-            'f1': torchmetrics.F1Score(task='binary')
-        }
-
         mlflow.log_params(params)
-        logger.info(f"Run ID: {run.info.run_id}")
+        print(f"Run ID: {run.info.run_id}")
 
         with open("model_summary.txt", "w") as f:
             f.write(str(summary(model)))
         mlflow.log_artifact("model_summary.txt")
 
-        logger.info("\nStarting training...")
+        print("\nStarting training...")
         for epoch in range(num_epochs):
-            logger.info(f"---⌛ Epoch {epoch+1}/{num_epochs} ---")
+            print(f"---⌛ Epoch {epoch+1}/{num_epochs} ---")
             train_loss = train_epoch(model, train_dataloader, optimizer, device)
             val_loss, val_accuracy, val_precision, val_recall, val_f1 = evaluate_epoch(model, val_dataloader, device, metrics)
 
-            logger.info(f"Train Loss: {train_loss:.4f}")
-            logger.info(f"Validation Loss: {val_loss:.4f}, Accuracy: {val_accuracy:.4f}, "
+            print(f"Train Loss: {train_loss:.4f}")
+            print(f"Validation Loss: {val_loss:.4f}, Accuracy: {val_accuracy:.4f}, "
                     f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}")
 
             # Log metrics to MLflow
@@ -224,73 +296,3 @@ def train(foundation_model, data_path):
                 predicted_label_id = torch.argmax(logits, dim=-1).item()
                 predicted_sentiment = "positive" if predicted_label_id == 1 else "negative"
                 print(f"Review: '{review}' -> Predicted Sentiment: {predicted_sentiment}")
-
-        
-        run_id = run.info.run_id
-        logger.info("run_id: {}; lifecycle_stage: {}".format(run_id, mlflow.get_run(run_id).info.lifecycle_stage))
-
-
-# --- 3. Training Function ---
-def train_epoch(model, dataloader, optimizer, device):
-    model.train()
-    total_loss = 0
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training")):
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        labels = batch['labels'].to(device)
-
-        optimizer.zero_grad()
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-        loss = outputs.loss
-        total_loss += loss.item()
-
-        loss.backward()
-        optimizer.step()
-
-    return total_loss / len(dataloader)
-
-# --- 4. Evaluation Function ---
-def evaluate_epoch(model, dataloader, device, metrics):
-    model.eval()
-    total_loss = 0
-    all_predictions = []
-    all_true_labels = []
-    
-    # Define metrics
-    metrics_list = ['accuracy', 'precision', 'recall', 'f1']
-
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss
-            total_loss += loss.item()
-
-            logits = outputs.logits
-            predictions = torch.argmax(logits, dim=-1).cpu().numpy()
-            all_predictions.extend(predictions)
-            all_true_labels.extend(labels.cpu().numpy())
-
-    avg_loss = total_loss / len(dataloader)
-
-    # Update metrics
-    for metric_name in metrics_list:
-        metrics[metric_name](torch.tensor(all_predictions), torch.tensor(all_true_labels))
-
-    # Compute metrics
-    accuracy = metrics['accuracy'].compute().item()
-    precision = metrics['precision'].compute().item()
-    recall = metrics['recall'].compute().item()
-    f1 = metrics['f1'].compute().item()
-
-    # Reset metrics
-    for metric_name in metrics_list:
-        metrics[metric_name].reset()
-
-    return avg_loss, accuracy, precision, recall, f1
-
-if __name__ == '__main__':
-    task()

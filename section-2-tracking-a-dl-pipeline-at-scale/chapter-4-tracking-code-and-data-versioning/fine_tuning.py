@@ -11,11 +11,6 @@ from flash.core.data.utils import download_data
 from flash.text import TextClassificationData, TextClassifier
 import torchmetrics
 
-# %%
-os.environ["AWS_ACCESS_KEY_ID"] = "minio"
-os.environ["AWS_SECRET_ACCESS_KEY"] = "minio123"
-os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://localhost:9000"
-os.environ["MLFLOW_TRACKING_URI"] = "http://localhost"
 
 # %%
 download_data("https://pl-flash-data.s3.amazonaws.com/imdb.zip", "./data/")
@@ -31,11 +26,12 @@ datamodule = TextClassificationData.from_csv(
 
 # %%
 classifier_model = TextClassifier(backbone="prajjwal1/bert-tiny", num_classes=datamodule.num_classes, metrics=torchmetrics.F1Score(datamodule.num_classes))
-trainer = flash.Trainer(max_epochs=3, gpus=torch.cuda.device_count())
+trainer = flash.Trainer(max_epochs=25, gpus=torch.cuda.device_count())
 
 
 # %%
-EXPERIMENT_NAME = "dl_model_chapter04"
+EXPERIMENT_NAME = "mlflow_dl_model_chapter_04"
+mlflow.set_tracking_uri('http://localhost:5000') # important to run the experiment inside the docker experimentation env
 mlflow.set_experiment(EXPERIMENT_NAME)
 experiment = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
 print("experiment_id:", experiment.experiment_id)
@@ -44,7 +40,7 @@ REGISTERED_MODEL_NAME = 'dl_finetuned_model'
 
 # %%
 mlflow.pytorch.autolog()
-with mlflow.start_run(experiment_id=experiment.experiment_id, run_name="chapter03") as dl_model_tracking_run:
+with mlflow.start_run(experiment_id=experiment.experiment_id, run_name="chapter04") as dl_model_tracking_run:
     trainer.finetune(classifier_model, datamodule=datamodule, strategy="freeze")
     trainer.test(classifier_model, datamodule=datamodule)
 
